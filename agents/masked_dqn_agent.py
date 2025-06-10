@@ -49,7 +49,6 @@ class SumTree:
         return self.tree[0]
 
 
-# PER Buffer
 class PrioritizedReplayBuffer:
     def __init__(self, capacity, alpha=0.6, beta_start=0.4, beta_frames=100000):
         self.tree = SumTree(capacity)
@@ -101,21 +100,17 @@ class MaskedDQNAgent(DQNAgent):
             mlp_layers=hidden_layers,
             device=device
         )
-        # Override uniform memory with PER
         self.memory = PrioritizedReplayBuffer(memory_capacity)
 
-        # Epsilon schedule
         self.epsilon_start = 1.0
         self.epsilon_end = 0.05
         self.epsilon_decay_steps = 30000
         self.total_steps = 0
 
-        # DQN hyperparams
         self.gamma = 0.99
         self.sync_freq = 100
         self.train_step = 0
 
-        # N-step returns
         self.n_step = n_step
         self.n_buffer = deque(maxlen=n_step)
 
@@ -142,29 +137,24 @@ class MaskedDQNAgent(DQNAgent):
         return self.step(state), []
 
     def feed(self, ts):
-        # ts = (state, action, reward, next_state, done)
         if not (isinstance(ts, tuple) and len(ts) == 5):
             return
         state, action, reward, next_state, done = ts
         if not (isinstance(state, dict) and isinstance(next_state, dict)):
             return
 
-        # Add to n-step buffer
         self.n_buffer.append((state, action, reward, next_state, done))
         if len(self.n_buffer) < self.n_step:
             return
 
-        # Compute n-step transition
         R = sum([self.n_buffer[i][2] * (self.gamma ** i) for i in range(self.n_step)])
         s0, a0 = self.n_buffer[0][0], self.n_buffer[0][1]
         ns, d = self.n_buffer[-1][3], self.n_buffer[-1][4]
         legal_ns = list(ns['legal_actions'].keys()) if not d else []
         transition = (s0['obs'], a0, R, ns['obs'], legal_ns, d)
 
-        # Push with max-priority
         self.memory.push(transition)
 
-        # Per-step train
         self.train()
 
     def train(self):
@@ -180,10 +170,8 @@ class MaskedDQNAgent(DQNAgent):
         D = torch.FloatTensor(np.array(dones)).unsqueeze(1).to(self.device)
         W = torch.FloatTensor(is_weights).unsqueeze(1).to(self.device)
 
-        # Current Q
         Q = self.q_estimator.qnet(S).gather(1, A)
 
-        # Double DQN target
         with torch.no_grad():
             Q_online = self.q_estimator.qnet(S2)
             Q_target = self.q_estimator.target_qnet(S2)
@@ -199,19 +187,15 @@ class MaskedDQNAgent(DQNAgent):
             Q2 = Q_target.gather(1, A2)
             target = R + self.gamma * (1 - D) * Q2
 
-        # Loss with importance sampling weights
         loss = (W * F.mse_loss(Q, target, reduction='none')).mean()
 
-        # Backprop
         self.q_estimator.optimizer.zero_grad()
         loss.backward()
         self.q_estimator.optimizer.step()
 
-        # Update priorities
         td_errors = (target - Q).detach().cpu().numpy().flatten()
         self.memory.update(idxs, td_errors)
 
-        # Target sync
         self.train_step += 1
         if self.train_step % self.sync_freq == 0:
             self.q_estimator.sync_target()

@@ -1,4 +1,3 @@
-# agents/rule_based_uno_agent.py
 import random
 
 
